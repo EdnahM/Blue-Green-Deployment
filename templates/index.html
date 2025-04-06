@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Blue-Green Demo App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+            background-color: {{ bg_color }};
+            transition: background-color 0.5s;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .version-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background-color: {{ "lightblue" if version == "blue" else "lightgreen" }};
+            font-weight: bold;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 0.8em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Blue-Green Deployment Demo</h1>
+        <p>You are currently viewing the <span class="version-badge">{{ version }}</span> version of the application.</p>
+        <p>Current server time: {{ current_time }}</p>
+        <div class="footer">
+            <p>A simple Flask application to demonstrate Blue-Green deployments on AWS App Runner</p>
+        </div>
+    </div>
+</body>
+</html>

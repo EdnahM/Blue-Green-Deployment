@@ -1,0 +1,120 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, blue, green ]
+  pull_request:
+    branches: [ main, blue, green ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety flake8
+      
+      - name: Check for secrets/passwords in code
+        run: |
+          pip install detect-secrets
+          detect-secrets scan --baseline .secrets.baseline
+      
+      - name: Run Bandit security scan
+        run: bandit -r . -x test_*.py
+      
+      - name: Check dependencies for vulnerabilities
+        run: safety check -r requirements.txt
+      
+      - name: Lint with flake8
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+  test:
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run tests with coverage
+        run: pytest --cov=. --cov-report=xml
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: true
+
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/blue' || github.ref == 'refs/heads/green')
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      - name: Determine version from branch
+        id: determine-version
+        run: |
+          BRANCH=$(echo ${GITHUB_REF#refs/heads/})
+          echo "VERSION=$BRANCH" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ steps.login-ecr.outputs.registry }}/blue-green-demo:$BRANCH-${{ github.sha }}" >> $GITHUB_ENV
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE_TAG }}
+          build-args: |
+            APP_VERSION=${{ env.VERSION }}
+      
+      - name: Deploy to App Runner
+        run: |
+          aws apprunner create-service \
+            --service-name blue-green-demo-${{ env.VERSION }} \
+            --source-configuration '{
+              "ImageRepository": {
+                "ImageIdentifier": "${{ env.IMAGE_TAG }}",
+                "ImageConfiguration": {
+                  "Port": "8080",
+                  "RuntimeEnvironmentVariables": {
+                    "APP_VERSION": "${{ env.VERSION }}"
+                  }
+                },
+                "ImageRepositoryType": "ECR"
+              },
+              "AutoDeploymentsEnabled": true
+            }' \
+            --auto-scaling-configuration-arn "arn:aws:apprunner:us-east-1:${{ secrets.AWS_ACCOUNT_ID }}:autoscalingconfiguration/DefaultConfiguration/1/00000000000000000000000000000001" \
+            --instance-configuration '{
+              "Cpu": "1 vCPU",
+              "Memory": "2 GB"
+            }' \
+            --health-check-configuration '{
+              "Path": "/health"
+            }'
